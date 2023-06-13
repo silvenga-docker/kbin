@@ -1,0 +1,140 @@
+name: "Build"
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+  schedule:
+    # Random time each week.
+    - cron:  '6 13 * * 3'
+
+jobs:
+  build:
+    permissions:
+      packages: write
+    runs-on: ubuntu-latest
+    env:
+      APP_IMAGE: ghcr.io/silvenga-docker/kbin/app
+      CADDY_IMAGE: ghcr.io/silvenga-docker/kbin/caddy
+      MESSENGER_IMAGE: ghcr.io/silvenga-docker/kbin/messenger
+      CONTEXT: ./src/kbin-core
+    steps:
+      - uses: docker/setup-buildx-action@v2
+        with:
+          install: true
+          version: latest
+      - uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+      - shell: bash
+        run: |
+          set -xe
+          sudo add-apt-repository ppa:ondrej/php
+          sudo apt-get install -y \
+            php8.2-common \
+            php8.2-fpm \
+            php8.2-cli \
+            php8.2-amqp \
+            php8.2-pgsql \
+            php8.2-gd \
+            php8.2-curl \
+            php8.2-simplexml \
+            php8.2-dom \
+            php8.2-xml \
+            php8.2-redis \
+            php8.2-intl \
+            unzip
+          sudo curl -sS https://getcomposer.org/installer -o /tmp/composer-setup.php
+          sudo php /tmp/composer-setup.php --install-dir=/usr/local/bin --filename=composer
+      - shell: bash
+        run: |
+          set -xe
+          cd ${{ env.CONTEXT }}
+
+          cp .env.example .env
+          # composer dump-env prod
+          composer install --prefer-dist --no-dev --no-autoloader --no-scripts --no-progress
+
+          yarn install
+          yarn build
+
+      # APP_IMAGE
+      - uses: docker/metadata-action@v4
+        id: meta_app
+        with:
+          images: ${{ env.APP_IMAGE }}
+          tags: |
+            type=schedule,pattern=weekly
+            type=schedule,pattern=weekly-{{date 'YYYYMMDD'}}
+            type=ref,event=branch
+            type=ref,event=tag
+            type=ref,event=pr
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+      - uses: docker/build-push-action@v4
+        with:
+          file: ${{ env.CONTEXT }}/Dockerfile
+          context: ${{ env.CONTEXT }}
+          push: true
+          pull: true
+          cache-from: ${{ format('type=registry,ref={0}:cache', env.APP_IMAGE) || ''}}
+          cache-to: ${{ format('type=registry,ref={0}:cache,mode=max', env.APP_IMAGE) || ''}}
+          tags: ${{ steps.meta_app.outputs.tags }}
+          labels: ${{ steps.meta_app.outputs.labels }}
+          target: app_php
+
+      # CADDY_IMAGE
+      - uses: docker/metadata-action@v4
+        id: meta_caddy
+        with:
+          images: ${{ env.CADDY_IMAGE }}
+          tags: |
+            type=schedule,pattern=weekly
+            type=schedule,pattern=weekly-{{date 'YYYYMMDD'}}
+            type=ref,event=branch
+            type=ref,event=tag
+            type=ref,event=pr
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+      - uses: docker/build-push-action@v4
+        with:
+          file: ${{ env.CONTEXT }}/Dockerfile
+          context: ${{ env.CONTEXT }}
+          push: true
+          pull: true
+          cache-from: ${{ format('type=registry,ref={0}:cache', env.CADDY_IMAGE) || ''}}
+          cache-to: ${{ format('type=registry,ref={0}:cache,mode=max', env.CADDY_IMAGE) || ''}}
+          tags: ${{ steps.meta_caddy.outputs.tags }}
+          labels: ${{ steps.meta_caddy.outputs.labels }}
+          target: app_caddy
+
+      # MESSENGER_IMAGE
+      - uses: docker/metadata-action@v4
+        id: meta_messenger
+        with:
+          images: ${{ env.MESSENGER_IMAGE }}
+          tags: |
+            type=schedule,pattern=weekly
+            type=schedule,pattern=weekly-{{date 'YYYYMMDD'}}
+            type=ref,event=branch
+            type=ref,event=tag
+            type=ref,event=pr
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+      - uses: docker/build-push-action@v4
+        with:
+          file: ${{ env.CONTEXT }}/Dockerfile
+          context: ${{ env.CONTEXT }}
+          push: true
+          pull: true
+          cache-from: ${{ format('type=registry,ref={0}:cache', env.MESSENGER_IMAGE) || ''}}
+          cache-to: ${{ format('type=registry,ref={0}:cache,mode=max', env.MESSENGER_IMAGE) || ''}}
+          tags: ${{ steps.meta_messenger.outputs.tags }}
+          labels: ${{ steps.meta_messenger.outputs.labels }}
+          target: symfony_messenger
+
